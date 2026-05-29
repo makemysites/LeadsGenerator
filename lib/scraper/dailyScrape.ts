@@ -14,6 +14,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasNoWebsite(website?: string | null): boolean {
+  if (!website) return true;
+  if (website.trim() === "") return true;
+  if (website === "http://" || website === "https://") return true;
+  return false;
+}
+
 /**
  * Core daily scrape algorithm.
  *
@@ -117,6 +124,9 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       leads_found: 0,
       api_calls_made: 0,
       new_leads_skipped: 0,
+      fsq_results_fetched: 0,
+      fsq_checked_website: 0,
+      fsq_no_website_found: 0,
       pointer_start: pointerStart,
       pointer_end: pointerStart,
       started_at: new Date().toISOString(),
@@ -138,6 +148,9 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
   const combinations = generateCombinations();
   let leadsFound = 0;
   let newLeadsSkipped = 0;
+  let fsqResultsFetched = 0;
+  let fsqCheckedWebsite = 0;
+  let fsqNoWebsiteFound = 0;
   let apiCallsMade = apiUsage.calls_made;
   const dailyLimit = apiUsage.daily_limit;
   let currentPointer = pointerStart;
@@ -196,6 +209,8 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
         // Call Foursquare API
         const searchResults = await searchFoursquarePlaces(combo.specialty, combo.area);
         apiCallsMade++;
+        fsqResultsFetched += searchResults.length;
+        console.log(`Search '${combo.specialty} doctor in ${combo.area}': got ${searchResults.length} results`);
 
         // Update api_usage after each call
         await supabase
@@ -224,9 +239,12 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
             continue;
           }
 
+          fsqCheckedWebsite++;
+
           // No-Website Check
-          const hasWebsite = place.website && place.website.trim() !== '';
-          if (!hasWebsite) {
+          const noWebsite = hasNoWebsite(place.website);
+          if (noWebsite) {
+            fsqNoWebsiteFound++;
             const doctorName = place.name || 'Unknown Doctor';
             const phone = formatPhone(place.tel || null);
             const formattedAddress = place.location?.formatted_address || '';
@@ -239,6 +257,8 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
             const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
               doctorName + ' ' + formattedAddress
             )}`;
+
+            console.log(`Attempting to insert lead: ${doctorName}`);
 
             const { error: insertError } = await supabase
               .from('leads')
@@ -317,14 +337,12 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
         newLeadsSkipped++;
         continue;
       }
-        // No-website check: Tags website is empty AND contact:website is empty
+        // No-website check using hasNoWebsite
         const websiteTag = element.tags?.website;
         const contactWebsiteTag = element.tags?.['contact:website'];
-        const hasWebsite =
-          (websiteTag && websiteTag.trim() !== '') ||
-          (contactWebsiteTag && contactWebsiteTag.trim() !== '');
+        const noWebsite = hasNoWebsite(websiteTag) && hasNoWebsite(contactWebsiteTag);
 
-        if (!hasWebsite) {
+        if (noWebsite) {
           const doctorName = element.tags?.name || 'Unknown Doctor';
           const rawPhone = element.tags?.phone || element.tags?.['contact:phone'] || null;
           const phone = formatPhone(rawPhone);
@@ -348,6 +366,8 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
             : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                 doctorName + ' ' + address
               )}`;
+
+          console.log(`Attempting to insert lead: ${doctorName}`);
 
           const { error: insertError } = await supabase
             .from('leads')
@@ -403,6 +423,9 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       leads_found: leadsFound,
       api_calls_made: apiCallsMade - (apiUsage.calls_made || 0), // Only Foursquare calls made in this run
       new_leads_skipped: newLeadsSkipped,
+      fsq_results_fetched: fsqResultsFetched,
+      fsq_checked_website: fsqCheckedWebsite,
+      fsq_no_website_found: fsqNoWebsiteFound,
       pointer_end: currentPointer,
       error_message: errorMessage,
       completed_at: new Date().toISOString(),

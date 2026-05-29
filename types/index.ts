@@ -37,6 +37,9 @@ export interface ScrapeRun {
   leads_found: number;
   api_calls_made: number;
   new_leads_skipped: number;
+  fsq_results_fetched?: number;
+  fsq_checked_website?: number;
+  fsq_no_website_found?: number;
   status: string;
   message: string | null;
   started_at: string;

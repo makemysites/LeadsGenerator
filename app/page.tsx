@@ -123,8 +123,37 @@ export default function DashboardPage() {
             </div>
           </div>
           {lastRun.message && (
-            <div style={{ marginTop: '8px', fontSize: '13px', color: '#94A3B8' }}>{lastRun.message}</div>
+            <div style={{ marginTop: '8px', fontSize: '13px', color: '#94A3B8', marginBottom: '16px' }}>{lastRun.message}</div>
           )}
+
+          {/* Last Scrape Log feedback */}
+          <div style={{ paddingTop: '16px', borderTop: '1px solid var(--color-border)' }}>
+            <div style={{ fontWeight: 600, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#475569', marginBottom: '8px' }}>
+              📋 Detailed Scrape Log
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', fontSize: '13px' }}>
+              <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
+                <span style={{ color: '#64748B' }}>Foursquare Results Fetched:</span>{' '}
+                <strong style={{ color: '#0F172A' }}>{lastRun.fsq_results_fetched ?? 0}</strong>
+              </div>
+              <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
+                <span style={{ color: '#64748B' }}>Checked for Website:</span>{' '}
+                <strong style={{ color: '#0F172A' }}>{lastRun.fsq_checked_website ?? 0}</strong>
+              </div>
+              <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
+                <span style={{ color: '#64748B' }}>No Website Found:</span>{' '}
+                <strong style={{ color: '#0F172A' }}>{lastRun.fsq_no_website_found ?? 0}</strong>
+              </div>
+              <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
+                <span style={{ color: '#16A34A' }}>Successfully Saved to DB:</span>{' '}
+                <strong style={{ color: '#15803D' }}>{lastRun.leads_found ?? 0}</strong>
+              </div>
+              <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
+                <span style={{ color: '#D97706' }}>Skipped (Duplicates):</span>{' '}
+                <strong style={{ color: '#B45309' }}>{lastRun.new_leads_skipped ?? 0}</strong>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
