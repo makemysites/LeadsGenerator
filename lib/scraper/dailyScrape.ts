@@ -16,14 +16,25 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Returns true if the website field is empty / a broken placeholder.
- * Foursquare returns "", "http://", "https://", null, or undefined for places with no website.
+ * Returns true if the doctor has no real website.
+ * Foursquare OMITS the website field entirely when absent (returns undefined, not null).
+ * This function handles: null, undefined, non-string, empty string, bare protocol stubs.
+ *
+ * NOTE: Temporarily set to ALWAYS return true so ALL doctors are saved.
+ * This confirms the full pipeline works. Revert the final line to `return false`
+ * once leads are appearing in the dashboard.
  */
-function hasNoWebsite(website?: string | null): boolean {
-  if (!website) return true;
-  if (website.trim() === '') return true;
-  if (website === 'http://' || website === 'https://') return true;
-  return false;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hasNoWebsite(websiteValue: any): boolean {
+  if (websiteValue === null) return true;
+  if (websiteValue === undefined) return true;
+  if (typeof websiteValue !== 'string') return true;
+  if (websiteValue.trim() === '') return true;
+  if (websiteValue.trim() === 'http://') return true;
+  if (websiteValue.trim() === 'https://') return true;
+  // ⚠️ TEMPORARY: save ALL doctors regardless of website to confirm pipeline works
+  // TODO: revert this line to `return false` once leads are confirmed saving
+  return true;
 }
 
 /**
@@ -297,11 +308,20 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
 
           fsqCheckedWebsite++;
           const websiteFromDetails = details.website;
-          console.log(`Details [${details.name}]: website="${websiteFromDetails}"`);
 
-          // ── STEP 2b: Website check ────────────────────────────────────
-          if (!hasNoWebsite(websiteFromDetails)) {
-            console.log(`Has website — skipping: ${details.name} → ${websiteFromDetails}`);
+          // ── STEP 2b: Full debug log before website check ──────────────
+          console.log('=== DOCTOR CHECK ===');
+          console.log('Name:', details.name);
+          console.log('Website raw value:', JSON.stringify(websiteFromDetails));
+          console.log('Website type:', typeof websiteFromDetails);
+          console.log('Has website? (!!value):', !!websiteFromDetails);
+          const willSave = hasNoWebsite(websiteFromDetails);
+          console.log('Will save as lead?', willSave);
+          console.log('====================');
+
+          // ── STEP 2c: Website check ────────────────────────────────────
+          if (!willSave) {
+            console.log(`SKIP: ${details.name} — has a real website: ${websiteFromDetails}`);
             continue;
           }
 
