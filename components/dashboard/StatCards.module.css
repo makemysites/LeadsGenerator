@@ -1,0 +1,86 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: #FFFFFF;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: all 150ms ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.iconPurple {
+  background: #F3E8FF;
+}
+
+.iconBlue {
+  background: #DBEAFE;
+}
+
+.iconGreen {
+  background: #DCFCE7;
+}
+
+.iconAmber {
+  background: #FEF3C7;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+}
+
+.value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #1E293B;
+}
+
+.label {
+  font-size: 13px;
+  color: #64748B;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .card {
+    padding: 16px;
+  }
+  .value {
+    font-size: 24px;
+  }
+}

@@ -1,0 +1,103 @@
+.mobileNav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background: #FFFFFF;
+  border-top: 1px solid #E2E8F0;
+  z-index: 100;
+  padding: 0 8px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.navItems {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: 100%;
+}
+
+.navItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #94A3B8;
+  transition: all 150ms ease;
+  text-decoration: none;
+  position: relative;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.navItem:hover {
+  color: #64748B;
+}
+
+.navItemActive {
+  color: #1D4ED8;
+}
+
+.navIcon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.navLabel {
+  line-height: 1.2;
+}
+
+.popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 8px;
+  background: #FFFFFF;
+  border-radius: 12px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  padding: 8px;
+  min-width: 160px;
+  animation: fadeIn 150ms ease;
+  border: 1px solid #E2E8F0;
+}
+
+.popoverItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #475569;
+  text-decoration: none;
+  transition: background 150ms ease;
+}
+
+.popoverItem:hover {
+  background: #F8FAFC;
+}
+
+.popoverBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1024px) {
+  .mobileNav {
+    display: block;
+  }
+}
