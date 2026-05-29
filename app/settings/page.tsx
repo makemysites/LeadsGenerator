@@ -22,6 +22,9 @@ export default function SettingsPage() {
   // Trigger manual scrape states
   const [scraping, setScraping] = useState(false);
 
+  // Reset API counter state
+  const [resettingApi, setResettingApi] = useState(false);
+
   // Fetch settings & history on mount
   useEffect(() => {
     async function fetchData() {
@@ -102,6 +105,28 @@ export default function SettingsPage() {
       showToast('Manual scraper failed. Check console logs.', 'error');
     } finally {
       setScraping(false);
+    }
+  }
+
+  // Handle reset API counter
+  async function handleResetApiCounter() {
+    setResettingApi(true);
+    try {
+      const res = await fetch('/api/usage/reset', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Reset failed');
+      showToast(data.message || 'API counter reset. You can scrape again.', 'success');
+      // Refresh status to show updated counter
+      const statusRes = await fetch('/api/scrape/status');
+      if (statusRes.ok) {
+        const statusData: ScrapeStatus = await statusRes.json();
+        setScrapeStatus(statusData);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to reset API counter.', 'error');
+    } finally {
+      setResettingApi(false);
     }
   }
 
@@ -244,6 +269,24 @@ export default function SettingsPage() {
               disabled={scraping}
             >
               {scraping ? 'Scraping...' : '🔍 Trigger Search Now'}
+            </button>
+          </div>
+
+          {/* Reset API Counter */}
+          <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>🔄 Reset API Call Counter</div>
+              <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', marginTop: '4px' }}>
+                Counter stuck at 100? Reset today&apos;s Foursquare API usage to 0 so you can scrape again.
+              </div>
+            </div>
+            <button
+              className="btn"
+              style={{ background: '#F59E0B', color: '#fff', fontWeight: 600 }}
+              onClick={handleResetApiCounter}
+              disabled={resettingApi}
+            >
+              {resettingApi ? 'Resetting...' : '🔄 Reset Counter'}
             </button>
           </div>
 
