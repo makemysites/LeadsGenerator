@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@supabase/supabase-js';
 import { getTodayIST } from '@/lib/utils/dateUtils';
 import { formatPhone } from '@/lib/utils/formatPhone';
 import { generateCombinations, TOTAL_COMBINATIONS } from './constants';
@@ -17,7 +17,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Returns true if the website field is empty / a broken placeholder.
- * Foursquare can return "", "http://", "https://", null, or undefined for places with no website.
+ * Foursquare returns "", "http://", "https://", null, or undefined for places with no website.
  */
 function hasNoWebsite(website?: string | null): boolean {
   if (!website) return true;
@@ -27,33 +27,59 @@ function hasNoWebsite(website?: string | null): boolean {
 }
 
 /**
+ * Creates a Supabase admin client directly using the service role key.
+ * This bypasses Row Level Security (RLS) entirely for all operations.
+ */
+function getAdminClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      `Missing Supabase env vars — URL: ${supabaseUrl ? 'SET' : 'MISSING'}, SERVICE_ROLE_KEY: ${serviceRoleKey ? 'SET' : 'MISSING'}`
+    );
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+/**
  * Core daily scrape algorithm.
  *
  * 1. Check if already ran today successfully
- * 2. Check Foursquare API usage limits (daily limit is 100 — counts BOTH search + detail calls)
+ * 2. Check Foursquare API usage limits (counts BOTH search + detail calls)
  * 3. Iterate specialty+area combos starting from pointer
- * 4. For each combo: search → for each result → call Place Details → check website → insert if no website
+ * 4. For each combo: search → Place Details per result → website check → upsert if no website
  * 5. Run backup Overpass API (OpenStreetMap)
  * 6. Save all results to database
  */
 export async function runDailyScrape(): Promise<ScrapeResult> {
-  const supabase = createServerClient();
+  // Use explicit admin client — bypasses RLS, no ambiguity
+  const db = getAdminClient();
   const todayIST = getTodayIST();
 
   console.log('=== runDailyScrape START ===');
-  console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'MISSING');
-  console.log('Supabase Service Role Key:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'MISSING');
-  console.log('Foursquare API Key:', process.env.FOURSQUARE_API_KEY ? 'SET' : 'MISSING');
+  console.log('NEXT_PUBLIC_SUPABASE_URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? 'SET' : 'MISSING');
+  console.log('SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'MISSING');
+  console.log('FOURSQUARE_API_KEY:', process.env.FOURSQUARE_API_KEY ? 'SET' : 'MISSING');
+  console.log('Today IST:', todayIST);
 
   // 1. Check if scrape already ran today successfully
-  const { data: existingRun } = await supabase
+  const { data: existingRun, error: existingRunError } = await db
     .from('scrape_runs')
-    .select('*')
+    .select('id, leads_found, api_calls_made, status')
     .eq('run_date', todayIST)
     .eq('status', 'completed')
     .maybeSingle();
 
+  if (existingRunError) {
+    console.error('Error checking existing run:', JSON.stringify(existingRunError));
+  }
+
   if (existingRun) {
+    console.log('Scrape already completed today, returning early.');
     return {
       leadsFound: existingRun.leads_found,
       apiCallsMade: existingRun.api_calls_made,
@@ -62,24 +88,28 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
     };
   }
 
-  // 2. Check/create api_usage record for today (default limit = 100)
-  let { data: apiUsage } = await supabase
+  // 2. Check/create api_usage record for today
+  let { data: apiUsage, error: apiUsageError } = await db
     .from('api_usage')
     .select('*')
     .eq('usage_date', todayIST)
     .maybeSingle();
 
+  if (apiUsageError) {
+    console.error('Error fetching api_usage:', JSON.stringify(apiUsageError));
+  }
+
   if (!apiUsage) {
-    // Get daily_limit from search_config
-    const { data: config } = await supabase
+    const { data: configForLimit } = await db
       .from('search_config')
       .select('daily_limit')
       .limit(1)
       .single();
 
-    const dailyLimit = config?.daily_limit || 100;
+    const dailyLimit = configForLimit?.daily_limit || 100;
+    console.log(`Creating api_usage record for ${todayIST} with limit ${dailyLimit}`);
 
-    const { data: newUsage, error: usageError } = await supabase
+    const { data: newUsage, error: insertUsageError } = await db
       .from('api_usage')
       .insert({
         usage_date: todayIST,
@@ -90,29 +120,33 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       .select()
       .single();
 
-    if (usageError || !newUsage) {
-      console.error('Failed to create api_usage record:', usageError);
+    if (insertUsageError || !newUsage) {
+      console.error('FAILED to create api_usage:', JSON.stringify(insertUsageError));
       return {
         leadsFound: 0,
         apiCallsMade: 0,
         status: 'failed',
-        message: `Failed to create API usage record: ${usageError?.message || 'Unknown error'}`,
+        message: `Failed to create API usage record: ${insertUsageError?.message || 'Unknown error'}`,
       };
     }
 
     apiUsage = newUsage;
+    console.log('api_usage record created:', JSON.stringify(apiUsage));
+  } else {
+    console.log('Existing api_usage:', JSON.stringify(apiUsage));
   }
 
   const foursquareLimitReached = apiUsage.is_limit_reached;
 
-  // 4. Create scrape_runs record with status='running'
-  const { data: config } = await supabase
+  // 3. Load search_config
+  const { data: config, error: configError } = await db
     .from('search_config')
     .select('*')
     .limit(1)
     .single();
 
-  if (!config) {
+  if (configError || !config) {
+    console.error('Error loading search_config:', JSON.stringify(configError));
     return {
       leadsFound: 0,
       apiCallsMade: 0,
@@ -121,9 +155,11 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
     };
   }
 
+  console.log('search_config:', JSON.stringify(config));
   const pointerStart = config.pointer_index;
 
-  const { data: scrapeRun, error: runError } = await supabase
+  // 4. Create scrape_runs record
+  const { data: scrapeRun, error: runError } = await db
     .from('scrape_runs')
     .insert({
       run_date: todayIST,
@@ -142,7 +178,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
     .single();
 
   if (runError || !scrapeRun) {
-    console.error('Failed to create scrape_run record:', JSON.stringify(runError));
+    console.error('FAILED to create scrape_run:', JSON.stringify(runError));
     return {
       leadsFound: 0,
       apiCallsMade: 0,
@@ -151,14 +187,15 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
     };
   }
 
-  // 5. Generate combinations and start scraping
+  console.log('scrape_run created:', scrapeRun.id);
+
+  // 5. Scrape loop
   const combinations = generateCombinations();
   let leadsFound = 0;
   let newLeadsSkipped = 0;
   let fsqResultsFetched = 0;
   let fsqCheckedWebsite = 0;
   let fsqNoWebsiteFound = 0;
-  // apiCallsMade counts BOTH search calls and place detail calls
   let apiCallsMade = apiUsage.calls_made;
   const dailyLimit = apiUsage.daily_limit;
   let currentPointer = pointerStart;
@@ -168,20 +205,15 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
   try {
     if (!foursquareLimitReached) {
       for (let i = 0; i < TOTAL_COMBINATIONS; i++) {
-        // Stop conditions
         if (leadsFound >= MAX_LEADS_PER_RUN) {
-          console.log(`Reached max leads per run (${MAX_LEADS_PER_RUN}), stopping.`);
+          console.log(`MAX_LEADS_PER_RUN (${MAX_LEADS_PER_RUN}) reached, stopping.`);
           break;
         }
-
         if (apiCallsMade >= dailyLimit) {
-          console.log(`Daily API limit reached (${apiCallsMade}/${dailyLimit}), stopping.`);
-          await supabase
+          console.log(`Daily limit reached (${apiCallsMade}/${dailyLimit}), stopping.`);
+          await db
             .from('api_usage')
-            .update({
-              is_limit_reached: true,
-              updated_at: new Date().toISOString(),
-            })
+            .update({ is_limit_reached: true, updated_at: new Date().toISOString() })
             .eq('id', apiUsage.id);
           break;
         }
@@ -189,280 +221,272 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
         const comboIndex = currentPointer % TOTAL_COMBINATIONS;
         const combo = combinations[comboIndex];
 
-        // Skip combinations that already have >= 5 leads in the DB
-        const { count: comboLeadsCount, error: countError } = await supabase
+        // Skip combos already having >= 5 leads
+        const { count: comboCount } = await db
           .from('leads')
           .select('*', { count: 'exact', head: true })
           .eq('specialty', combo.specialty)
           .eq('area', combo.area);
 
-        if (countError) {
-          console.error(`Error counting leads for combo "${combo.specialty} in ${combo.area}":`, countError);
-        }
-
-        if (comboLeadsCount !== null && comboLeadsCount >= 5) {
-          console.log(`Skipping "${combo.specialty} in ${combo.area}" — already has ${comboLeadsCount} leads.`);
+        if (comboCount !== null && comboCount >= 5) {
+          console.log(`Skipping "${combo.specialty} in ${combo.area}" — already has ${comboCount} leads.`);
           currentPointer = (currentPointer + 1) % TOTAL_COMBINATIONS;
-          await supabase
+          await db
             .from('search_config')
             .update({ pointer_index: currentPointer, updated_at: new Date().toISOString() })
             .eq('id', config.id);
           continue;
         }
 
-        // ── STEP 1: Search call ──────────────────────────────────────────
+        // ── STEP 1: Search ────────────────────────────────────────────────
         const searchResults = await searchFoursquarePlaces(combo.specialty, combo.area);
         apiCallsMade++;
         fsqResultsFetched += searchResults.length;
 
-        console.log(`Search '${combo.specialty} doctor in ${combo.area}': got ${searchResults.length} results (total API calls so far: ${apiCallsMade})`);
+        console.log(`Search "${combo.specialty} in ${combo.area}": ${searchResults.length} results | total calls: ${apiCallsMade}/${dailyLimit}`);
 
-        // Only log raw details once per run to avoid log spam
         if (!firstSearchDone) {
           firstSearchDone = true;
-          console.log('=== FIRST SEARCH RAW RESULTS ===');
-          console.log(JSON.stringify(searchResults.slice(0, 2), null, 2));
-          console.log('=================================');
+          console.log('FIRST SEARCH RAW:', JSON.stringify(searchResults.slice(0, 2), null, 2));
         }
 
-        // Persist the search call count immediately
-        await supabase
+        await db
           .from('api_usage')
           .update({ calls_made: apiCallsMade, updated_at: new Date().toISOString() })
           .eq('id', apiUsage.id);
 
-        // ── STEP 2: For each result, call Place Details to get website ──
+        // ── STEP 2: Place Details per result ─────────────────────────────
         for (const place of searchResults) {
           if (leadsFound >= MAX_LEADS_PER_RUN) break;
           if (apiCallsMade >= dailyLimit) {
-            console.log(`API limit reached mid-loop (${apiCallsMade}/${dailyLimit}), stopping detail calls.`);
+            console.log(`API limit mid-loop (${apiCallsMade}/${dailyLimit}), breaking.`);
             break;
           }
 
-          // Check if place_id already exists — skip if so
-          const { data: existingLead } = await supabase
+          // Duplicate check
+          const { data: existingLead, error: dupCheckError } = await db
             .from('leads')
             .select('id')
             .eq('place_id', place.fsq_id)
             .maybeSingle();
 
+          if (dupCheckError) {
+            console.error(`Dup check error for ${place.fsq_id}:`, JSON.stringify(dupCheckError));
+          }
+
           if (existingLead) {
             newLeadsSkipped++;
-            console.log(`Skipping ${place.name} (${place.fsq_id}) — already in DB.`);
+            console.log(`Duplicate: ${place.name} (${place.fsq_id}) — already in DB.`);
             continue;
           }
 
-          // ── STEP 2a: Fetch Place Details to get website field ─────────
+          // ── STEP 2a: Place Details call ───────────────────────────────
           await sleep(DETAIL_DELAY_MS);
           const details = await getFoursquarePlaceDetails(place.fsq_id);
           apiCallsMade++;
 
-          // Persist detail call count immediately
-          await supabase
+          await db
             .from('api_usage')
             .update({ calls_made: apiCallsMade, updated_at: new Date().toISOString() })
             .eq('id', apiUsage.id);
 
           if (!details) {
-            console.log(`Could not fetch details for ${place.fsq_id}, skipping.`);
+            console.log(`Details fetch failed for ${place.fsq_id}, skipping.`);
             continue;
           }
 
           fsqCheckedWebsite++;
           const websiteFromDetails = details.website;
-          console.log(`Details for ${details.name} (${place.fsq_id}): website="${websiteFromDetails}"`);
+          console.log(`Details [${details.name}]: website="${websiteFromDetails}"`);
 
           // ── STEP 2b: Website check ────────────────────────────────────
-          const noWebsite = hasNoWebsite(websiteFromDetails);
-          if (!noWebsite) {
-            console.log(`Skipping ${details.name} — has a website: ${websiteFromDetails}`);
+          if (!hasNoWebsite(websiteFromDetails)) {
+            console.log(`Has website — skipping: ${details.name} → ${websiteFromDetails}`);
             continue;
           }
 
           fsqNoWebsiteFound++;
 
-          // ── STEP 2c: Build lead and insert ────────────────────────────
+          // ── STEP 2c: Build exact insert payload ───────────────────────
+          // Column names verified against schema: place_id, doctor_name, specialty, area,
+          // address, phone, google_maps_url, rating, total_reviews, scraped_date, status
           const doctorName = details.name || place.name || 'Unknown Doctor';
           const phone = formatPhone(details.tel || place.tel || null);
-          const formattedAddress = details.location?.formatted_address || place.location?.formatted_address || '';
-          const mappedArea =
+          const address = details.location?.formatted_address || place.location?.formatted_address || '';
+          const area =
             details.location?.locality ||
             place.location?.locality ||
-            (details.location?.neighborhood && details.location.neighborhood[0]) ||
-            (place.location?.neighborhood && place.location.neighborhood[0]) ||
+            (details.location?.neighborhood?.[0]) ||
+            (place.location?.neighborhood?.[0]) ||
             combo.area;
           const rawRating = details.rating ?? place.rating;
           const rating = rawRating !== undefined ? rawRating / 2 : null;
-          const ratingCount = details.stats?.total_ratings ?? place.stats?.total_ratings ?? null;
-          const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-            doctorName + ' ' + formattedAddress
-          )}`;
+          const totalReviews = details.stats?.total_ratings ?? place.stats?.total_ratings ?? null;
+          const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(doctorName + ' ' + address)}`;
 
-          const insertPayload = {
-            place_id: place.fsq_id,
-            doctor_name: doctorName,
-            specialty: combo.specialty,
-            area: mappedArea,
-            address: formattedAddress,
-            phone: phone,
-            website: null,
-            google_maps_url: mapsUrl,
-            rating: rating,
-            total_reviews: ratingCount,
-            status: 'to_call',
-            scraped_date: todayIST,
+          const leadPayload = {
+            place_id:        place.fsq_id,
+            doctor_name:     doctorName,
+            specialty:       combo.specialty,
+            area:            area,
+            address:         address,
+            phone:           phone,
+            website:         null as null,
+            google_maps_url: googleMapsUrl,
+            rating:          rating,
+            total_reviews:   totalReviews,
+            status:          'to_call',
+            scraped_date:    todayIST,
           };
 
-          console.log(`Inserting lead: ${doctorName} | website: "${websiteFromDetails}" | has_website: ${!noWebsite}`);
+          console.log(`INSERTING: ${doctorName} | place_id=${place.fsq_id} | area=${area} | phone=${phone}`);
+          console.log('Payload:', JSON.stringify(leadPayload));
 
-          const insertResult = await supabase.from('leads').insert(insertPayload);
-          const insertError = insertResult.error;
+          // Use upsert with ignoreDuplicates to safely handle race conditions
+          const { error: upsertError } = await db
+            .from('leads')
+            .upsert(leadPayload, { onConflict: 'place_id', ignoreDuplicates: true });
 
-          console.log('Insert error:', JSON.stringify(insertError));
-
-          if (insertError) {
-            console.error(`Failed to insert Foursquare lead for ${doctorName}:`, JSON.stringify(insertError));
+          if (upsertError) {
+            console.error(
+              `LEAD INSERT FAILED: ${doctorName} | code=${upsertError.code} | msg=${upsertError.message} | details=${upsertError.details} | hint=${upsertError.hint}`
+            );
           } else {
             leadsFound++;
-            console.log(`✓ Lead saved: ${doctorName} (total saved: ${leadsFound})`);
+            console.log(`✓ LEAD SAVED: ${doctorName} (total saved so far: ${leadsFound})`);
           }
         }
 
-        // Advance the pointer for this combination
+        // Advance pointer
         currentPointer = (currentPointer + 1) % TOTAL_COMBINATIONS;
-        await supabase
+        await db
           .from('search_config')
           .update({ pointer_index: currentPointer, updated_at: new Date().toISOString() })
           .eq('id', config.id);
 
         await sleep(SEARCH_DELAY_MS);
       }
+    } else {
+      console.log('Foursquare limit already reached for today, skipping Foursquare scrape.');
     }
   } catch (error) {
-    errorMessage =
-      error instanceof Error ? error.message : 'Unknown error during Foursquare scrape';
-    console.error('Foursquare scrape error:', error);
+    errorMessage = error instanceof Error ? error.message : 'Unknown error during Foursquare scrape';
+    console.error('FOURSQUARE SCRAPE ERROR:', error);
   }
 
-  // 6. Run backup source — Overpass API (OpenStreetMap)
-  // Overpass does NOT count toward the Foursquare API limit.
+  // 6. Overpass backup
   try {
-    console.log('Foursquare scraper finished. Waiting 2 seconds before Overpass...');
+    console.log('Foursquare done. Starting Overpass in 2s...');
     await sleep(OVERPASS_DELAY_MS);
 
-    console.log('Running Overpass scraper...');
     const osmElements = await scrapeOverpass();
-    console.log(`Overpass fetched ${osmElements.length} elements.`);
-
+    console.log(`Overpass: ${osmElements.length} elements fetched.`);
     let osmLeadsAdded = 0;
 
     for (const element of osmElements) {
       const placeId = `osm_${element.id}`;
 
-      const { data: existingLead } = await supabase
+      const { data: existingOsm } = await db
         .from('leads')
         .select('id')
         .eq('place_id', placeId)
         .maybeSingle();
 
-      if (existingLead) {
+      if (existingOsm) {
         newLeadsSkipped++;
         continue;
       }
 
-      const websiteTag = element.tags?.website;
-      const contactWebsiteTag = element.tags?.['contact:website'];
-      const noWebsite = hasNoWebsite(websiteTag) && hasNoWebsite(contactWebsiteTag);
+      const websiteTag       = element.tags?.website;
+      const contactWebsite   = element.tags?.['contact:website'];
+      if (!hasNoWebsite(websiteTag) || !hasNoWebsite(contactWebsite)) continue;
 
-      if (noWebsite) {
-        const doctorName = element.tags?.name || 'Unknown Doctor';
-        const rawPhone = element.tags?.phone || element.tags?.['contact:phone'] || null;
-        const phone = formatPhone(rawPhone);
+      const doctorName    = element.tags?.name || 'Unknown Doctor';
+      const rawPhone      = element.tags?.phone || element.tags?.['contact:phone'] || null;
+      const phone         = formatPhone(rawPhone);
+      const street        = element.tags?.['addr:street'];
+      const suburb        = element.tags?.['addr:suburb'];
+      const address       = [street, suburb].filter(Boolean).join(', ') || 'Hyderabad, India';
+      const area          = element.tags?.['addr:suburb'] || element.tags?.['addr:city'] || 'Hyderabad';
+      const rawSpecialty  = element.tags?.['healthcare:speciality'] || element.tags?.amenity || 'General Physician';
+      const specialty     = rawSpecialty.charAt(0).toUpperCase() + rawSpecialty.slice(1);
+      const lat           = element.lat ?? element.center?.lat;
+      const lon           = element.lon ?? element.center?.lon;
+      const googleMapsUrl = lat !== undefined && lon !== undefined
+        ? `https://www.google.com/maps?q=${lat},${lon}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(doctorName + ' ' + address)}`;
 
-        const street = element.tags?.['addr:street'];
-        const suburb = element.tags?.['addr:suburb'];
-        const address = [street, suburb].filter(Boolean).join(', ') || 'Hyderabad, India';
-        const area = element.tags?.['addr:suburb'] || element.tags?.['addr:city'] || 'Hyderabad';
+      const osmPayload = {
+        place_id:        placeId,
+        doctor_name:     doctorName,
+        specialty:       specialty,
+        area:            area,
+        address:         address,
+        phone:           phone,
+        website:         null as null,
+        google_maps_url: googleMapsUrl,
+        rating:          null as null,
+        total_reviews:   null as null,
+        status:          'to_call',
+        scraped_date:    todayIST,
+      };
 
-        const rawSpecialty = element.tags?.['healthcare:speciality'] || element.tags?.amenity || 'General Physician';
-        const specialty = rawSpecialty.charAt(0).toUpperCase() + rawSpecialty.slice(1);
+      console.log(`OSM INSERTING: ${doctorName}`);
 
-        const lat = element.lat !== undefined ? element.lat : element.center?.lat;
-        const lon = element.lon !== undefined ? element.lon : element.center?.lon;
-        const mapsUrl =
-          lat !== undefined && lon !== undefined
-            ? `https://www.google.com/maps?q=${lat},${lon}`
-            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(doctorName + ' ' + address)}`;
+      const { error: osmError } = await db
+        .from('leads')
+        .upsert(osmPayload, { onConflict: 'place_id', ignoreDuplicates: true });
 
-        console.log(`Inserting Overpass lead: ${doctorName}`);
-
-        const insertResult = await supabase.from('leads').insert({
-          place_id: placeId,
-          doctor_name: doctorName,
-          specialty: specialty,
-          area: area,
-          address: address,
-          phone: phone,
-          website: null,
-          google_maps_url: mapsUrl,
-          rating: null,
-          total_reviews: null,
-          status: 'to_call',
-          scraped_date: todayIST,
-        });
-
-        console.log('Overpass insert error:', JSON.stringify(insertResult.error));
-
-        if (insertResult.error) {
-          console.error(`Failed to insert Overpass lead for ${doctorName}:`, JSON.stringify(insertResult.error));
-        } else {
-          leadsFound++;
-          osmLeadsAdded++;
-          console.log(`✓ Overpass lead saved: ${doctorName} (total saved: ${leadsFound})`);
-        }
+      if (osmError) {
+        console.error(`OSM INSERT FAILED: ${doctorName} | code=${osmError.code} | msg=${osmError.message}`);
+      } else {
+        leadsFound++;
+        osmLeadsAdded++;
+        console.log(`✓ OSM LEAD SAVED: ${doctorName}`);
       }
     }
-    console.log(`Overpass completed. Added ${osmLeadsAdded} new leads.`);
+
+    console.log(`Overpass done. Added ${osmLeadsAdded} new leads.`);
   } catch (error) {
-    const osmError = error instanceof Error ? error.message : 'Unknown error during Overpass scrape';
-    console.error('Overpass scrape error:', osmError);
-    if (!errorMessage) {
-      errorMessage = `Overpass error: ${osmError}`;
-    } else {
-      errorMessage += ` | Overpass error: ${osmError}`;
-    }
+    const osmErr = error instanceof Error ? error.message : 'Unknown Overpass error';
+    console.error('OVERPASS ERROR:', osmErr);
+    errorMessage = errorMessage ? `${errorMessage} | Overpass: ${osmErr}` : `Overpass: ${osmErr}`;
   }
 
-  // 7. Update scrape_runs with final status
+  // 7. Finalize scrape_run record
   const finalStatus = errorMessage
     ? 'failed'
     : apiCallsMade >= dailyLimit && !foursquareLimitReached
     ? 'partial'
     : 'completed';
 
-  await supabase
+  const { error: finalUpdateError } = await db
     .from('scrape_runs')
     .update({
-      status: finalStatus,
-      leads_found: leadsFound,
-      api_calls_made: apiCallsMade - (apiUsage.calls_made || 0),
-      new_leads_skipped: newLeadsSkipped,
-      fsq_results_fetched: fsqResultsFetched,
-      fsq_checked_website: fsqCheckedWebsite,
+      status:               finalStatus,
+      leads_found:          leadsFound,
+      api_calls_made:       apiCallsMade - (apiUsage.calls_made || 0),
+      new_leads_skipped:    newLeadsSkipped,
+      fsq_results_fetched:  fsqResultsFetched,
+      fsq_checked_website:  fsqCheckedWebsite,
       fsq_no_website_found: fsqNoWebsiteFound,
-      pointer_end: currentPointer,
-      error_message: errorMessage,
-      completed_at: new Date().toISOString(),
+      pointer_end:          currentPointer,
+      error_message:        errorMessage,
+      completed_at:         new Date().toISOString(),
     })
     .eq('id', scrapeRun.id);
 
-  const message = errorMessage
-    ? `Scrape failed or partially errored: ${errorMessage}. Found ${leadsFound} leads.`
-    : apiCallsMade >= dailyLimit && !foursquareLimitReached
-    ? `Scrape stopped: API limit (${dailyLimit}) reached. Found ${leadsFound} leads.`
-    : `Scrape completed. Found ${leadsFound} leads (Foursquare: ${fsqNoWebsiteFound} without website, Overpass included).`;
+  if (finalUpdateError) {
+    console.error('Failed to update scrape_run final status:', JSON.stringify(finalUpdateError));
+  }
 
-  console.log(`=== runDailyScrape END | status: ${finalStatus} | leads: ${leadsFound} | API calls: ${apiCallsMade} ===`);
+  const message = errorMessage
+    ? `Scrape errored: ${errorMessage}. Saved ${leadsFound} leads.`
+    : apiCallsMade >= dailyLimit && !foursquareLimitReached
+    ? `API limit (${dailyLimit}) reached. Saved ${leadsFound} leads.`
+    : `Scrape completed. Saved ${leadsFound} leads. (${fsqNoWebsiteFound} Foursquare without website, Overpass included)`;
+
+  console.log(`=== runDailyScrape END | status=${finalStatus} | leads=${leadsFound} | calls=${apiCallsMade} ===`);
 
   return {
     leadsFound,
