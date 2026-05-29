@@ -86,8 +86,8 @@ export default function DashboardPage() {
         <div className="api-banner" style={{ marginBottom: '24px' }}>
           <span className="api-banner-icon">⚠️</span>
           <span>
-            Google API Daily Limit Reached — {apiUsage.daily_limit}/{apiUsage.daily_limit} calls used. 
-            No new leads today. Scraper resumes automatically tomorrow at 7:00 AM.
+            ⚠️ Foursquare API daily limit reached ({apiUsage.daily_limit}/{apiUsage.daily_limit} calls used). 
+            No more searches today. Scraper resumes tomorrow at 7:00 AM.
           </span>
         </div>
       )}

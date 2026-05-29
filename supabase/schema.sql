@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS api_usage (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   usage_date      DATE NOT NULL UNIQUE,
   calls_made      INTEGER NOT NULL DEFAULT 0,
-  daily_limit     INTEGER NOT NULL DEFAULT 100,
+  daily_limit     INTEGER NOT NULL DEFAULT 900,
   is_limit_reached BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -105,7 +105,7 @@ CREATE TRIGGER api_usage_updated_at
 -- ============================================================
 CREATE TABLE IF NOT EXISTS search_config (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  daily_limit     INTEGER NOT NULL DEFAULT 100,
+  daily_limit     INTEGER NOT NULL DEFAULT 900,
   pointer_index   INTEGER NOT NULL DEFAULT 0,
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -121,7 +121,7 @@ CREATE TRIGGER search_config_updated_at
 -- ============================================================
 -- Insert default search config if not exists
 INSERT INTO search_config (daily_limit, pointer_index)
-SELECT 100, 0
+SELECT 900, 0
 WHERE NOT EXISTS (SELECT 1 FROM search_config LIMIT 1);
 
 -- ============================================================

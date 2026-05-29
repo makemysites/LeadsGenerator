@@ -73,18 +73,42 @@ export interface ScrapeResult {
   message: string;
 }
 
-export interface PlaceResult {
-  id: string;
-  displayName?: {
-    text: string;
-    languageCode?: string;
+export interface FoursquarePlace {
+  fsq_id: string;
+  name: string;
+  location?: {
+    formatted_address?: string;
+    locality?: string;
+    neighborhood?: string[];
   };
-  formattedAddress?: string;
-  nationalPhoneNumber?: string;
-  websiteUri?: string;
-  googleMapsUri?: string;
+  tel?: string;
+  website?: string;
   rating?: number;
-  userRatingCount?: number;
+  stats?: {
+    total_ratings?: number;
+  };
 }
 
-export type PlaceDetails = PlaceResult;
+export interface OverpassElement {
+  type: 'node' | 'way';
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: {
+    lat: number;
+    lon: number;
+  };
+  tags?: {
+    name?: string;
+    phone?: string;
+    'contact:phone'?: string;
+    website?: string;
+    'contact:website'?: string;
+    'addr:street'?: string;
+    'addr:suburb'?: string;
+    'addr:city'?: string;
+    'healthcare:speciality'?: string;
+    amenity?: string;
+  };
+}
+

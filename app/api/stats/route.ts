@@ -106,7 +106,7 @@ export async function GET(): Promise<NextResponse> {
           }
         : {
             calls_made: 0,
-            daily_limit: 100,
+            daily_limit: 900,
             is_limit_reached: false,
           },
     };

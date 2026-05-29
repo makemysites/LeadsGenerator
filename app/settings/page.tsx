@@ -13,7 +13,7 @@ export default function SettingsPage() {
   const [scrapeStatus, setScrapeStatus] = useState<ScrapeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [dailyLimit, setDailyLimit] = useState(60);
+  const [dailyLimit, setDailyLimit] = useState(900);
 
   // Danger Zone states
   const [confirmText, setConfirmText] = useState('');
@@ -79,11 +79,10 @@ export default function SettingsPage() {
     setScraping(true);
     showToast('Starting scraper run. Please wait...', 'info');
     try {
-      const res = await fetch('/api/cron/daily-scrape', {
+      const res = await fetch('/api/scrape/manual', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer manual', // We handle local manual bypass or auth
         },
       });
 
@@ -139,15 +138,9 @@ export default function SettingsPage() {
   }
 
   // Cost calculation
-  // Google Places API costs:
-  // Text Search (New): $25.00 per 1000 requests
-  // Place Details (New): $20.00 per 1000 requests
-  // Each day, worst case uses dailyLimit calls.
-  // Monthly searches = dailyLimit * 30.
-  // Google provides $200.00 free credit monthly.
+  // Foursquare Places API v3 is completely free up to 1000 calls/day.
+  // Overpass API is completely free and has no limit, and doesn't count toward Foursquare limit.
   const estimatedCallsPerMonth = dailyLimit * 30;
-  const estimatedCostPerMonth = (estimatedCallsPerMonth / 1000) * 22.5; // Average of Search + Details rate
-  const isFullyCovered = estimatedCostPerMonth <= 200;
 
   return (
     <div>
@@ -168,9 +161,9 @@ export default function SettingsPage() {
           {/* API Status Card */}
           <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
             <div>
-              <div style={{ fontSize: '16px', fontWeight: 600 }}>Google Places API Status</div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Foursquare Places API Status</div>
               <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-                Verifies connection with the Google Places SDK (New)
+                Verifies connection with the Foursquare Places SDK v3
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -184,7 +177,7 @@ export default function SettingsPage() {
           <div className="card">
             <div className="section-title">📊 Lead Generation Controls</div>
             <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', marginBottom: '20px' }}>
-              Control your daily Google Places API quota. Higher limits find more leads but consume more API credits.
+              Control your daily Foursquare Places API quota. Higher limits search more areas but consume more daily free tier credits.
             </p>
 
             <div style={{ marginBottom: '24px' }}>
@@ -196,8 +189,8 @@ export default function SettingsPage() {
                 type="range"
                 className="slider"
                 min="10"
-                max="200"
-                step="5"
+                max="900"
+                step="10"
                 value={dailyLimit}
                 onChange={(e) => setDailyLimit(parseInt(e.target.value))}
                 onMouseUp={(e) => handleLimitChange(parseInt((e.target as HTMLInputElement).value))}
@@ -206,20 +199,18 @@ export default function SettingsPage() {
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>
                 <span>10 calls (Conservative)</span>
-                <span>200 calls (Aggressive)</span>
+                <span>900 calls (Aggressive)</span>
               </div>
             </div>
 
             {/* Cost estimator */}
             <div style={{ padding: '16px', background: 'var(--color-bg)', borderRadius: '8px', border: '1px solid var(--color-border)', fontSize: '14px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>Estimated Monthly Cost Estimator</div>
+              <div style={{ fontWeight: 600, marginBottom: '6px' }}>Foursquare & OpenStreetMap Quota Info</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--color-text-secondary)' }}>
-                <div>Est. Max API Requests: <strong>{estimatedCallsPerMonth.toLocaleString()} calls / month</strong></div>
-                <div>Est. Cost: <strong style={{ color: isFullyCovered ? 'var(--color-success)' : 'var(--color-warning)' }}>
-                  ${estimatedCostPerMonth.toFixed(2)} / month
-                </strong></div>
+                <div>Est. Max Foursquare Requests: <strong>{estimatedCallsPerMonth.toLocaleString()} calls / month</strong></div>
+                <div>Foursquare Cost: <strong style={{ color: 'var(--color-success)' }}>$0.00 (100% FREE)</strong></div>
                 <div style={{ fontSize: '12px', marginTop: '6px', color: 'var(--color-success)', fontWeight: 500 }}>
-                  🎉 {isFullyCovered ? '100% FREE! Fully covered by Google Maps\' $200.00 monthly free credit.' : 'Exceeds Google\'s $200.00 free tier. Consider lowering daily limit to remain 100% free.'}
+                  🎉 Foursquare Places API is 100% FREE! Foursquare provides 1,000 free calls daily. We set a maximum limit of 900 calls/day as a safe buffer.
                 </div>
               </div>
             </div>
