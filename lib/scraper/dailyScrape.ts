@@ -59,14 +59,10 @@ function getAdminClient() {
 /**
  * Core daily scrape algorithm.
  *
- * 1. Check if already ran today successfully
- * 2. Check Foursquare API usage limits (counts BOTH search + detail calls)
- * 3. Iterate specialty+area combos starting from pointer
- * 4. For each combo: search → Place Details per result → website check → upsert if no website
- * 5. Run backup Overpass API (OpenStreetMap)
- * 6. Save all results to database
+ * @param force - When true (manual trigger), bypasses the "already completed today" check
+ *                and deletes today's completed run so it can start fresh.
  */
-export async function runDailyScrape(): Promise<ScrapeResult> {
+export async function runDailyScrape(force = false): Promise<ScrapeResult> {
   // Use explicit admin client — bypasses RLS, no ambiguity
   const db = getAdminClient();
   const todayIST = getTodayIST();
@@ -90,13 +86,19 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
   }
 
   if (existingRun) {
-    console.log('Scrape already completed today, returning early.');
-    return {
-      leadsFound: existingRun.leads_found,
-      apiCallsMade: existingRun.api_calls_made,
-      status: 'already_completed',
-      message: `Scrape already completed today. Found ${existingRun.leads_found} leads.`,
-    };
+    if (force) {
+      // Manual trigger — delete the completed record so we can re-run fresh
+      console.log(`FORCE mode: deleting completed run ${existingRun.id} to allow re-run.`);
+      await db.from('scrape_runs').delete().eq('id', existingRun.id);
+    } else {
+      console.log('Scrape already completed today, returning early.');
+      return {
+        leadsFound: existingRun.leads_found,
+        apiCallsMade: existingRun.api_calls_made,
+        status: 'already_completed',
+        message: `Scrape already completed today. Found ${existingRun.leads_found} leads.`,
+      };
+    }
   }
 
   // 2. Check/create api_usage record for today
