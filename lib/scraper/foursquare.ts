@@ -1,3 +1,15 @@
+/**
+ * Foursquare Places API v3
+ *
+ * All endpoints use:
+ *   Base: https://api.foursquare.com/v3/places/
+ *   Auth: Authorization header = raw API key (no "Bearer" prefix)
+ *   Accept: application/json
+ *
+ * The FOURSQUARE_API_KEY must be a v3 key from developer.foursquare.com.
+ * A v2 key (client_id / client_secret style) will return 410 "Gone".
+ */
+
 export interface FoursquarePlace {
   fsq_id: string;
   name: string;
@@ -14,112 +26,128 @@ export interface FoursquarePlace {
   };
 }
 
+function getApiKey(): string {
+  const key = process.env.FOURSQUARE_API_KEY;
+  if (!key) throw new Error('FOURSQUARE_API_KEY is not set in environment variables.');
+  // Log key prefix only (never log full key) so we can confirm it's loaded
+  console.log(`Foursquare API key prefix: ${key.substring(0, 8)}...`);
+  return key;
+}
+
 /**
- * Searches for doctor places using the Foursquare Places API v3 Search endpoint.
- * NOTE: The search endpoint does NOT return the `website` field reliably.
- * Use `getFoursquarePlaceDetails` after this to get the website for each place.
- * Returns an array of Foursquare places, or an empty array on failure.
+ * SEARCH — GET /v3/places/search
+ *
+ * Does NOT return the `website` field. Use getFoursquarePlaceDetails for that.
+ * Returns an array of places (may be empty on 0 results or on error).
  */
 export async function searchFoursquarePlaces(
   specialty: string,
   area: string
 ): Promise<FoursquarePlace[]> {
+  const apiKey = getApiKey();
+  const query = `${specialty} doctor`;
+  const near = `${area}, Hyderabad, India`;
+
+  const params = new URLSearchParams({
+    query,
+    near,
+    limit: '10',
+    fields: 'fsq_id,name,location,tel,rating,stats',
+  });
+
+  const url = `https://api.foursquare.com/v3/places/search?${params.toString()}`;
+  console.log(`FSQ SEARCH → ${url}`);
+
+  let response: Response;
   try {
-    const apiKey = process.env.FOURSQUARE_API_KEY;
-    if (!apiKey) {
-      throw new Error('FOURSQUARE_API_KEY environment variable is not set.');
-    }
-
-    const query = `${specialty} doctor`;
-    const near = `${area}, Hyderabad, India`;
-    const params = new URLSearchParams({
-      query,
-      near,
-      limit: '10',
-      // website field is NOT available from search — use Place Details endpoint instead
-      fields: 'fsq_id,name,location,tel,rating,stats',
+    response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: apiKey,
+        Accept: 'application/json',
+      },
     });
-
-    const response = await fetch(
-      `https://api.foursquare.com/v3/places/search?${params.toString()}`,
-      {
-        method: 'GET',
-        headers: {
-          Authorization: apiKey,
-          Accept: 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(
-        `Foursquare search failed (${response.status}): ${errorBody}`
-      );
-      return [];
-    }
-
-    const data = await response.json();
-    const results: FoursquarePlace[] = data.results || [];
-
-    // Debug: Log raw first result so we can see exact structure
-    if (results.length > 0) {
-      console.log('RAW RESPONSE first result:', JSON.stringify(results[0], null, 2));
-      console.log('Total results returned:', results.length);
-      console.log('First result website field (from search):', results[0]?.website);
-    } else {
-      console.log(`Search returned 0 results for "${query}" near "${near}"`);
-    }
-
-    return results;
-  } catch (error) {
-    console.error('Foursquare search error:', error);
+  } catch (networkErr) {
+    console.error('FSQ SEARCH network error:', networkErr);
     return [];
   }
+
+  const rawBody = await response.text();
+  console.log(`FSQ SEARCH status: ${response.status}`);
+  console.log(`FSQ SEARCH body (first 500 chars): ${rawBody.substring(0, 500)}`);
+
+  if (!response.ok) {
+    console.error(`FSQ SEARCH FAILED: HTTP ${response.status} — ${rawBody}`);
+    return [];
+  }
+
+  let data: { results?: FoursquarePlace[] };
+  try {
+    data = JSON.parse(rawBody);
+  } catch {
+    console.error('FSQ SEARCH: failed to parse JSON response:', rawBody);
+    return [];
+  }
+
+  const results: FoursquarePlace[] = data.results || [];
+  console.log(`FSQ SEARCH "${query}" near "${near}": ${results.length} results`);
+
+  if (results.length > 0) {
+    console.log('FSQ SEARCH first result:', JSON.stringify(results[0], null, 2));
+  }
+
+  return results;
 }
 
 /**
- * Fetches full Place Details for a given fsq_id, including the `website` field.
- * The search endpoint does NOT reliably return the website field.
- * This is a separate API call per place.
- * Returns the full place detail object, or null on failure.
+ * PLACE DETAILS — GET /v3/places/{fsq_id}
+ *
+ * This IS where the `website` field comes from.
+ * The field is ABSENT (undefined) when the place has no website registered — NOT null.
+ * Returns the place detail object, or null on error.
  */
 export async function getFoursquarePlaceDetails(
   fsqId: string
 ): Promise<FoursquarePlace | null> {
+  const apiKey = getApiKey();
+
+  const params = new URLSearchParams({
+    fields: 'fsq_id,name,location,tel,website,rating,stats',
+  });
+
+  const url = `https://api.foursquare.com/v3/places/${fsqId}?${params.toString()}`;
+  console.log(`FSQ DETAILS → ${url}`);
+
+  let response: Response;
   try {
-    const apiKey = process.env.FOURSQUARE_API_KEY;
-    if (!apiKey) {
-      throw new Error('FOURSQUARE_API_KEY environment variable is not set.');
-    }
-
-    const params = new URLSearchParams({
-      fields: 'fsq_id,name,location,tel,website,rating,stats',
+    response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: apiKey,
+        Accept: 'application/json',
+      },
     });
-
-    const response = await fetch(
-      `https://api.foursquare.com/v3/places/${fsqId}?${params.toString()}`,
-      {
-        method: 'GET',
-        headers: {
-          Authorization: apiKey,
-          Accept: 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(
-        `Foursquare place details failed for ${fsqId} (${response.status}): ${errorBody}`
-      );
-      return null;
-    }
-
-    const data: FoursquarePlace = await response.json();
-    return data;
-  } catch (error) {
-    console.error(`Foursquare place details error for ${fsqId}:`, error);
+  } catch (networkErr) {
+    console.error(`FSQ DETAILS network error for ${fsqId}:`, networkErr);
     return null;
   }
+
+  const rawBody = await response.text();
+  console.log(`FSQ DETAILS [${fsqId}] status: ${response.status}`);
+  console.log(`FSQ DETAILS [${fsqId}] body (first 500 chars): ${rawBody.substring(0, 500)}`);
+
+  if (!response.ok) {
+    console.error(`FSQ DETAILS FAILED [${fsqId}]: HTTP ${response.status} — ${rawBody}`);
+    return null;
+  }
+
+  let data: FoursquarePlace;
+  try {
+    data = JSON.parse(rawBody);
+  } catch {
+    console.error(`FSQ DETAILS: failed to parse JSON for ${fsqId}:`, rawBody);
+    return null;
+  }
+
+  return data;
 }
