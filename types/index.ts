@@ -36,6 +36,7 @@ export interface ScrapeRun {
   run_date: string;
   leads_found: number;
   api_calls_made: number;
+  new_leads_skipped: number;
   status: string;
   message: string | null;
   started_at: string;

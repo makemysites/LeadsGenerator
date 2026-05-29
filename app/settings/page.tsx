@@ -13,7 +13,7 @@ export default function SettingsPage() {
   const [scrapeStatus, setScrapeStatus] = useState<ScrapeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [dailyLimit, setDailyLimit] = useState(900);
+  const [dailyLimit, setDailyLimit] = useState(100);
 
   // Danger Zone states
   const [confirmText, setConfirmText] = useState('');
@@ -189,7 +189,7 @@ export default function SettingsPage() {
                 type="range"
                 className="slider"
                 min="10"
-                max="900"
+                max="100"
                 step="10"
                 value={dailyLimit}
                 onChange={(e) => setDailyLimit(parseInt(e.target.value))}
@@ -199,7 +199,7 @@ export default function SettingsPage() {
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>
                 <span>10 calls (Conservative)</span>
-                <span>900 calls (Aggressive)</span>
+                <span>100 calls (Aggressive)</span>
               </div>
             </div>
 
@@ -210,7 +210,7 @@ export default function SettingsPage() {
                 <div>Est. Max Foursquare Requests: <strong>{estimatedCallsPerMonth.toLocaleString()} calls / month</strong></div>
                 <div>Foursquare Cost: <strong style={{ color: 'var(--color-success)' }}>$0.00 (100% FREE)</strong></div>
                 <div style={{ fontSize: '12px', marginTop: '6px', color: 'var(--color-success)', fontWeight: 500 }}>
-                  🎉 Foursquare Places API is 100% FREE! Foursquare provides 1,000 free calls daily. We set a maximum limit of 900 calls/day as a safe buffer.
+                  🎉 Foursquare Places API is 100% FREE! Foursquare provides 1,000 free calls daily. We set a maximum limit of 100 calls/day as a safe buffer.
                 </div>
               </div>
             </div>
@@ -257,6 +257,7 @@ export default function SettingsPage() {
                     <tr>
                       <th>Run Date</th>
                       <th>Leads Found</th>
+                      <th>Duplicates Skipped</th>
                       <th>API Calls</th>
                       <th>Status</th>
                       <th>Completed At</th>
@@ -267,6 +268,7 @@ export default function SettingsPage() {
                       <tr key={run.id}>
                         <td style={{ fontWeight: 600 }}>{run.run_date}</td>
                         <td style={{ color: 'var(--color-success)', fontWeight: 600 }}>+{run.leads_found} new leads</td>
+                        <td style={{ color: 'var(--color-text-secondary)' }}>{run.new_leads_skipped} skipped</td>
                         <td>{run.api_calls_made} calls</td>
                         <td>
                           <span

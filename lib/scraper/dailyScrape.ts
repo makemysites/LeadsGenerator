@@ -18,7 +18,7 @@ function sleep(ms: number): Promise<void> {
  * Core daily scrape algorithm.
  *
  * 1. Check if already ran today successfully
- * 2. Check Foursquare API usage limits (daily limit is 900)
+ * 2. Check Foursquare API usage limits (daily limit is 100)
  * 3. Iterate specialty+area combos starting from pointer (Foursquare API)
  * 4. For each combo, search and collect leads without websites
  * 5. Run backup Overpass API (OpenStreetMap) to fill in extra Hyderabad leads
@@ -45,7 +45,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
     };
   }
 
-  // 2. Check/create api_usage record for today (default limit = 900)
+  // 2. Check/create api_usage record for today (default limit = 100)
   let { data: apiUsage } = await supabase
     .from('api_usage')
     .select('*')
@@ -60,7 +60,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       .limit(1)
       .single();
 
-    const dailyLimit = config?.daily_limit || 900;
+    const dailyLimit = config?.daily_limit || 100;
 
     const { data: newUsage, error: usageError } = await supabase
       .from('api_usage')
@@ -116,6 +116,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       status: 'running',
       leads_found: 0,
       api_calls_made: 0,
+      new_leads_skipped: 0,
       pointer_start: pointerStart,
       pointer_end: pointerStart,
       started_at: new Date().toISOString(),
@@ -136,6 +137,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
   // 5. Generate combinations and start scraping Foursquare
   const combinations = generateCombinations();
   let leadsFound = 0;
+  let newLeadsSkipped = 0;
   let apiCallsMade = apiUsage.calls_made;
   const dailyLimit = apiUsage.daily_limit;
   let currentPointer = pointerStart;
@@ -164,6 +166,33 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
         const comboIndex = currentPointer % TOTAL_COMBINATIONS;
         const combo = combinations[comboIndex];
 
+        // 2. Count leads from that exact specialty + area combination already exist in database
+        const { count: comboLeadsCount, error: countError } = await supabase
+          .from('leads')
+          .select('*', { count: 'exact', head: true })
+          .eq('specialty', combo.specialty)
+          .eq('area', combo.area);
+
+        if (countError) {
+          console.error(`Error counting leads for combo "${combo.specialty} in ${combo.area}":`, countError);
+        }
+
+        if (comboLeadsCount !== null && comboLeadsCount >= 5) {
+          console.log(`Skipping combination ${comboIndex} "${combo.specialty} in ${combo.area}" because it already has ${comboLeadsCount} leads (>= 5).`);
+          
+          // Increment pointer and update search_config in DB, then continue
+          currentPointer = (currentPointer + 1) % TOTAL_COMBINATIONS;
+          await supabase
+            .from('search_config')
+            .update({
+              pointer_index: currentPointer,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', config.id);
+            
+          continue;
+        }
+
         // Call Foursquare API
         const searchResults = await searchFoursquarePlaces(combo.specialty, combo.area);
         apiCallsMade++;
@@ -183,55 +212,58 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
             break;
           }
 
+          // Check if place_id already exists in leads FIRST
+          const { data: existingLead } = await supabase
+            .from('leads')
+            .select('id')
+            .eq('place_id', place.fsq_id)
+            .maybeSingle();
+
+          if (existingLead) {
+            newLeadsSkipped++;
+            continue;
+          }
+
           // No-Website Check
           const hasWebsite = place.website && place.website.trim() !== '';
           if (!hasWebsite) {
-            // Check if place_id already exists in leads
-            const { data: existingLead } = await supabase
+            const doctorName = place.name || 'Unknown Doctor';
+            const phone = formatPhone(place.tel || null);
+            const formattedAddress = place.location?.formatted_address || '';
+            const mappedArea =
+              place.location?.locality ||
+              (place.location?.neighborhood && place.location.neighborhood[0]) ||
+              combo.area;
+            const rating = place.rating !== undefined ? place.rating / 2 : null;
+            const ratingCount = place.stats?.total_ratings || null;
+            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+              doctorName + ' ' + formattedAddress
+            )}`;
+
+            const { error: insertError } = await supabase
               .from('leads')
-              .select('id')
-              .eq('place_id', place.fsq_id)
-              .maybeSingle();
+              .insert({
+                place_id: place.fsq_id,
+                doctor_name: doctorName,
+                specialty: combo.specialty,
+                area: mappedArea,
+                address: formattedAddress,
+                phone: phone,
+                website: null,
+                google_maps_url: mapsUrl,
+                rating: rating,
+                total_reviews: ratingCount,
+                status: 'to_call',
+                scraped_date: todayIST,
+              });
 
-            if (!existingLead) {
-              const doctorName = place.name || 'Unknown Doctor';
-              const phone = formatPhone(place.tel || null);
-              const formattedAddress = place.location?.formatted_address || '';
-              const mappedArea =
-                place.location?.locality ||
-                (place.location?.neighborhood && place.location.neighborhood[0]) ||
-                combo.area;
-              const rating = place.rating !== undefined ? place.rating / 2 : null;
-              const ratingCount = place.stats?.total_ratings || null;
-              const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                doctorName + ' ' + formattedAddress
-              )}`;
-
-              const { error: insertError } = await supabase
-                .from('leads')
-                .insert({
-                  place_id: place.fsq_id,
-                  doctor_name: doctorName,
-                  specialty: combo.specialty,
-                  area: mappedArea,
-                  address: formattedAddress,
-                  phone: phone,
-                  website: null,
-                  google_maps_url: mapsUrl,
-                  rating: rating,
-                  rating_count: ratingCount,
-                  status: 'to_call',
-                  scraped_date: todayIST,
-                });
-
-              if (insertError) {
-                console.error(
-                  `Failed to insert Foursquare lead for ${doctorName}:`,
-                  insertError
-                );
-              } else {
-                leadsFound++;
-              }
+            if (insertError) {
+              console.error(
+                `Failed to insert Foursquare lead for ${doctorName}:`,
+                insertError
+              );
+            } else {
+              leadsFound++;
             }
           }
         }
@@ -281,7 +313,10 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
         .eq('place_id', placeId)
         .maybeSingle();
 
-      if (!existingLead) {
+      if (existingLead) {
+        newLeadsSkipped++;
+        continue;
+      }
         // No-website check: Tags website is empty AND contact:website is empty
         const websiteTag = element.tags?.website;
         const contactWebsiteTag = element.tags?.['contact:website'];
@@ -326,7 +361,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
               website: null,
               google_maps_url: mapsUrl,
               rating: null,
-              rating_count: null,
+              total_reviews: null,
               status: 'to_call',
               scraped_date: todayIST,
             });
@@ -342,7 +377,6 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
           }
         }
       }
-    }
     console.log(`Overpass scraper completed. Added ${osmLeadsAdded} new leads.`);
   } catch (error) {
     const osmError =
@@ -368,6 +402,7 @@ export async function runDailyScrape(): Promise<ScrapeResult> {
       status: finalStatus,
       leads_found: leadsFound,
       api_calls_made: apiCallsMade - (apiUsage.calls_made || 0), // Only Foursquare calls made in this run
+      new_leads_skipped: newLeadsSkipped,
       pointer_end: currentPointer,
       error_message: errorMessage,
       completed_at: new Date().toISOString(),

@@ -2,15 +2,27 @@
 -- Doctor Lead Generation CRM - Complete Database Schema
 -- ============================================================
 -- Run this in the Supabase SQL Editor to set up all tables.
+-- This script drops all tables and rebuilds them cleanly from scratch.
 -- ============================================================
 
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Drop existing triggers first
+DROP TRIGGER IF EXISTS leads_updated_at ON leads;
+DROP TRIGGER IF EXISTS api_usage_updated_at ON api_usage;
+DROP TRIGGER IF EXISTS search_config_updated_at ON search_config;
+
+-- Drop existing tables in correct dependency order
+DROP TABLE IF EXISTS leads CASCADE;
+DROP TABLE IF EXISTS scrape_runs CASCADE;
+DROP TABLE IF EXISTS api_usage CASCADE;
+DROP TABLE IF EXISTS search_config CASCADE;
+
 -- ============================================================
 -- 1. LEADS TABLE
 -- ============================================================
-CREATE TABLE IF NOT EXISTS leads (
+CREATE TABLE leads (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   place_id        TEXT NOT NULL UNIQUE,
   doctor_name     TEXT NOT NULL,
@@ -21,7 +33,7 @@ CREATE TABLE IF NOT EXISTS leads (
   website         TEXT,
   google_maps_url TEXT,
   rating          NUMERIC(2, 1),
-  rating_count    INTEGER,
+  total_reviews   INTEGER,
   status          TEXT NOT NULL DEFAULT 'to_call'
                     CHECK (status IN ('to_call', 'called', 'follow_up', 'rejected')),
   notes           TEXT,
@@ -39,7 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_leads_scraped_date ON leads (scraped_date DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_specialty ON leads (specialty);
 CREATE INDEX IF NOT EXISTS idx_leads_area ON leads (area);
 CREATE INDEX IF NOT EXISTS idx_leads_place_id ON leads (place_id);
-CREATE INDEX IF NOT EXISTS idx_leads_doctor_name ON leads USING gin (doctor_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_leads_follow_up ON leads (follow_up_datetime)
   WHERE status = 'follow_up';
 CREATE INDEX IF NOT EXISTS idx_leads_status_scraped ON leads (status, scraped_date DESC);
@@ -53,7 +64,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS leads_updated_at ON leads;
 CREATE TRIGGER leads_updated_at
   BEFORE UPDATE ON leads
   FOR EACH ROW
@@ -62,13 +72,14 @@ CREATE TRIGGER leads_updated_at
 -- ============================================================
 -- 2. SCRAPE_RUNS TABLE
 -- ============================================================
-CREATE TABLE IF NOT EXISTS scrape_runs (
+CREATE TABLE scrape_runs (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   run_date        DATE NOT NULL,
   status          TEXT NOT NULL DEFAULT 'running'
                     CHECK (status IN ('running', 'completed', 'failed', 'partial')),
   leads_found     INTEGER NOT NULL DEFAULT 0,
   api_calls_made  INTEGER NOT NULL DEFAULT 0,
+  new_leads_skipped INTEGER NOT NULL DEFAULT 0,
   pointer_start   INTEGER NOT NULL DEFAULT 0,
   pointer_end     INTEGER NOT NULL DEFAULT 0,
   error_message   TEXT,
@@ -76,25 +87,24 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
   completed_at    TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_scrape_runs_run_date ON scrape_runs (run_date DESC);
-CREATE INDEX IF NOT EXISTS idx_scrape_runs_status ON scrape_runs (status);
+CREATE INDEX idx_scrape_runs_run_date ON scrape_runs (run_date DESC);
+CREATE INDEX idx_scrape_runs_status ON scrape_runs (status);
 
 -- ============================================================
 -- 3. API_USAGE TABLE
 -- ============================================================
-CREATE TABLE IF NOT EXISTS api_usage (
+CREATE TABLE api_usage (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   usage_date      DATE NOT NULL UNIQUE,
   calls_made      INTEGER NOT NULL DEFAULT 0,
-  daily_limit     INTEGER NOT NULL DEFAULT 900,
+  daily_limit     INTEGER NOT NULL DEFAULT 100,
   is_limit_reached BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_api_usage_date ON api_usage (usage_date DESC);
+CREATE INDEX idx_api_usage_date ON api_usage (usage_date DESC);
 
-DROP TRIGGER IF EXISTS api_usage_updated_at ON api_usage;
 CREATE TRIGGER api_usage_updated_at
   BEFORE UPDATE ON api_usage
   FOR EACH ROW
@@ -103,14 +113,13 @@ CREATE TRIGGER api_usage_updated_at
 -- ============================================================
 -- 4. SEARCH_CONFIG TABLE
 -- ============================================================
-CREATE TABLE IF NOT EXISTS search_config (
+CREATE TABLE search_config (
   id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  daily_limit     INTEGER NOT NULL DEFAULT 900,
+  daily_limit     INTEGER NOT NULL DEFAULT 100,
   pointer_index   INTEGER NOT NULL DEFAULT 0,
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-DROP TRIGGER IF EXISTS search_config_updated_at ON search_config;
 CREATE TRIGGER search_config_updated_at
   BEFORE UPDATE ON search_config
   FOR EACH ROW
@@ -121,7 +130,7 @@ CREATE TRIGGER search_config_updated_at
 -- ============================================================
 -- Insert default search config if not exists
 INSERT INTO search_config (daily_limit, pointer_index)
-SELECT 900, 0
+SELECT 100, 0
 WHERE NOT EXISTS (SELECT 1 FROM search_config LIMIT 1);
 
 -- ============================================================
@@ -131,15 +140,3 @@ ALTER TABLE leads DISABLE ROW LEVEL SECURITY;
 ALTER TABLE scrape_runs DISABLE ROW LEVEL SECURITY;
 ALTER TABLE api_usage DISABLE ROW LEVEL SECURITY;
 ALTER TABLE search_config DISABLE ROW LEVEL SECURITY;
-
--- ============================================================
--- NOTES:
--- ============================================================
--- • The gin_trgm_ops index on doctor_name requires the pg_trgm extension.
---   If it fails, enable it first:
---     CREATE EXTENSION IF NOT EXISTS pg_trgm;
---   Or remove that index if trigram search isn't needed (ilike still works).
---
--- • RLS is disabled since this app has no user authentication.
---   The service role key bypasses RLS anyway.
--- ============================================================
