@@ -2,27 +2,23 @@ import { createClient } from '@supabase/supabase-js';
 import { getTodayIST } from '@/lib/utils/dateUtils';
 import { formatPhone } from '@/lib/utils/formatPhone';
 import { generateCombinations, TOTAL_COMBINATIONS } from './constants';
-import { searchFoursquarePlaces, getFoursquarePlaceDetails } from './foursquare';
+import { searchGooglePlaces, extractArea } from './googlePlaces';
 import { scrapeOverpass } from './overpass';
 import type { ScrapeResult } from '@/types';
 
+
 const MAX_LEADS_PER_RUN = 50;
-const SEARCH_DELAY_MS = 500;
-const DETAIL_DELAY_MS = 200;
-const OVERPASS_DELAY_MS = 2000;
+const SEARCH_DELAY_MS = 800;  // respect Google's rate limits
+
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Returns true if the doctor has no real website.
- * Foursquare OMITS the website field entirely when absent (returns undefined, not null).
- * This function handles: null, undefined, non-string, empty string, bare protocol stubs.
- *
- * NOTE: Temporarily set to ALWAYS return true so ALL doctors are saved.
- * This confirms the full pipeline works. Revert the final line to `return false`
- * once leads are appearing in the dashboard.
+ * Returns true if the doctor has no real website (i.e., should be saved as a lead).
+ * Google Places omits websiteUri entirely when no website is registered — field is undefined.
+ * Also handles null, empty string, and bare protocol stubs from legacy data.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function hasNoWebsite(websiteValue: any): boolean {
@@ -32,9 +28,7 @@ function hasNoWebsite(websiteValue: any): boolean {
   if (websiteValue.trim() === '') return true;
   if (websiteValue.trim() === 'http://') return true;
   if (websiteValue.trim() === 'https://') return true;
-  // ⚠️ TEMPORARY: save ALL doctors regardless of website to confirm pipeline works
-  // TODO: revert this line to `return false` once leads are confirmed saving
-  return true;
+  return false; // has a real website — skip this doctor
 }
 
 /**
@@ -206,14 +200,12 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
   const combinations = generateCombinations();
   let leadsFound = 0;
   let newLeadsSkipped = 0;
-  let fsqResultsFetched = 0;
-  let fsqCheckedWebsite = 0;
-  let fsqNoWebsiteFound = 0;
+  let placesChecked = 0;
+  let placesWithoutWebsite = 0;
   let apiCallsMade = apiUsage.calls_made;
   const dailyLimit = apiUsage.daily_limit;
   let currentPointer = pointerStart;
   let errorMessage: string | null = null;
-  let firstSearchDone = false;
 
   try {
     if (!foursquareLimitReached) {
@@ -251,103 +243,74 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
           continue;
         }
 
-        // ── STEP 1: Search ────────────────────────────────────────────────
-        const searchResults = await searchFoursquarePlaces(combo.specialty, combo.area);
+        // ── SEARCH ─────────────────────────────────────────────────
+        // Google Places returns name+address+phone+website in ONE call.
+        // No separate details call needed — this halves API usage vs Foursquare.
+        const searchResults = await searchGooglePlaces(combo.specialty, combo.area);
         apiCallsMade++;
-        fsqResultsFetched += searchResults.length;
+        placesChecked += searchResults.length;
 
-        console.log(`Search "${combo.specialty} in ${combo.area}": ${searchResults.length} results | total calls: ${apiCallsMade}/${dailyLimit}`);
-
-        if (!firstSearchDone) {
-          firstSearchDone = true;
-          console.log('FIRST SEARCH RAW:', JSON.stringify(searchResults.slice(0, 2), null, 2));
-        }
+        console.log(`Google "${combo.specialty} in ${combo.area}": ${searchResults.length} results | calls: ${apiCallsMade}/${dailyLimit}`);
 
         await db
           .from('api_usage')
           .update({ calls_made: apiCallsMade, updated_at: new Date().toISOString() })
           .eq('id', apiUsage.id);
 
-        // ── STEP 2: Place Details per result ─────────────────────────────
+        // ── PROCESS EACH RESULT ──────────────────────────────────────
         for (const place of searchResults) {
           if (leadsFound >= MAX_LEADS_PER_RUN) break;
-          if (apiCallsMade >= dailyLimit) {
-            console.log(`API limit mid-loop (${apiCallsMade}/${dailyLimit}), breaking.`);
-            break;
-          }
+
+          const placeId = place.id;
+          const doctorName = place.displayName?.text || 'Unknown Doctor';
 
           // Duplicate check
           const { data: existingLead, error: dupCheckError } = await db
             .from('leads')
             .select('id')
-            .eq('place_id', place.fsq_id)
+            .eq('place_id', placeId)
             .maybeSingle();
 
           if (dupCheckError) {
-            console.error(`Dup check error for ${place.fsq_id}:`, JSON.stringify(dupCheckError));
+            console.error(`Dup check error for ${placeId}:`, JSON.stringify(dupCheckError));
           }
 
           if (existingLead) {
             newLeadsSkipped++;
-            console.log(`Duplicate: ${place.name} (${place.fsq_id}) — already in DB.`);
+            console.log(`Duplicate: ${doctorName} (${placeId}) — already in DB.`);
             continue;
           }
 
-          // ── STEP 2a: Place Details call ───────────────────────────────
-          await sleep(DETAIL_DELAY_MS);
-          const details = await getFoursquarePlaceDetails(place.fsq_id);
-          apiCallsMade++;
+          // ── WEBSITE CHECK ───────────────────────────────────────
+          // Google Places omits websiteUri entirely when no website is registered
+          const websiteValue = place.websiteUri;
 
-          await db
-            .from('api_usage')
-            .update({ calls_made: apiCallsMade, updated_at: new Date().toISOString() })
-            .eq('id', apiUsage.id);
-
-          if (!details) {
-            console.log(`Details fetch failed for ${place.fsq_id}, skipping.`);
-            continue;
-          }
-
-          fsqCheckedWebsite++;
-          const websiteFromDetails = details.website;
-
-          // ── STEP 2b: Full debug log before website check ──────────────
           console.log('=== DOCTOR CHECK ===');
-          console.log('Name:', details.name);
-          console.log('Website raw value:', JSON.stringify(websiteFromDetails));
-          console.log('Website type:', typeof websiteFromDetails);
-          console.log('Has website? (!!value):', !!websiteFromDetails);
-          const willSave = hasNoWebsite(websiteFromDetails);
+          console.log('Name:', doctorName);
+          console.log('Website raw value:', JSON.stringify(websiteValue));
+          console.log('Website type:', typeof websiteValue);
+          const willSave = hasNoWebsite(websiteValue);
           console.log('Will save as lead?', willSave);
           console.log('====================');
 
-          // ── STEP 2c: Website check ────────────────────────────────────
           if (!willSave) {
-            console.log(`SKIP: ${details.name} — has a real website: ${websiteFromDetails}`);
+            console.log(`SKIP: ${doctorName} — has website: ${websiteValue}`);
             continue;
           }
 
-          fsqNoWebsiteFound++;
+          placesWithoutWebsite++;
 
-          // ── STEP 2c: Build exact insert payload ───────────────────────
-          // Column names verified against schema: place_id, doctor_name, specialty, area,
-          // address, phone, google_maps_url, rating, total_reviews, scraped_date, status
-          const doctorName = details.name || place.name || 'Unknown Doctor';
-          const phone = formatPhone(details.tel || place.tel || null);
-          const address = details.location?.formatted_address || place.location?.formatted_address || '';
-          const area =
-            details.location?.locality ||
-            place.location?.locality ||
-            (details.location?.neighborhood?.[0]) ||
-            (place.location?.neighborhood?.[0]) ||
-            combo.area;
-          const rawRating = details.rating ?? place.rating;
-          const rating = rawRating !== undefined ? rawRating / 2 : null;
-          const totalReviews = details.stats?.total_ratings ?? place.stats?.total_ratings ?? null;
+          // ── BUILD PAYLOAD ─────────────────────────────────────────
+          const phone = formatPhone(place.nationalPhoneNumber || place.internationalPhoneNumber || null);
+          const address = place.formattedAddress || '';
+          const area = extractArea(place, combo.area);
+          // Google Places rating is already 0-5 (Foursquare was 0-10)
+          const rating = place.rating ?? null;
+          const totalReviews = place.userRatingCount ?? null;
           const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(doctorName + ' ' + address)}`;
 
           const leadPayload = {
-            place_id:        place.fsq_id,
+            place_id:        placeId,
             doctor_name:     doctorName,
             specialty:       combo.specialty,
             area:            area,
@@ -361,10 +324,8 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
             scraped_date:    todayIST,
           };
 
-          console.log(`INSERTING: ${doctorName} | place_id=${place.fsq_id} | area=${area} | phone=${phone}`);
-          console.log('Payload:', JSON.stringify(leadPayload));
+          console.log(`INSERTING: ${doctorName} | place_id=${placeId} | area=${area} | phone=${phone}`);
 
-          // Use upsert with ignoreDuplicates to safely handle race conditions
           const { error: upsertError } = await db
             .from('leads')
             .upsert(leadPayload, { onConflict: 'place_id', ignoreDuplicates: true });
@@ -375,7 +336,7 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
             );
           } else {
             leadsFound++;
-            console.log(`✓ LEAD SAVED: ${doctorName} (total saved so far: ${leadsFound})`);
+            console.log(`✓ LEAD SAVED: ${doctorName} (total saved: ${leadsFound})`);
           }
         }
 
@@ -389,17 +350,17 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
         await sleep(SEARCH_DELAY_MS);
       }
     } else {
-      console.log('Foursquare limit already reached for today, skipping Foursquare scrape.');
+      console.log('API limit already reached for today, skipping Google Places scrape.');
     }
   } catch (error) {
-    errorMessage = error instanceof Error ? error.message : 'Unknown error during Foursquare scrape';
-    console.error('FOURSQUARE SCRAPE ERROR:', error);
+    errorMessage = error instanceof Error ? error.message : 'Unknown error during Google Places scrape';
+    console.error('GOOGLE PLACES SCRAPE ERROR:', error);
   }
 
   // 6. Overpass backup
   try {
-    console.log('Foursquare done. Starting Overpass in 2s...');
-    await sleep(OVERPASS_DELAY_MS);
+    console.log('Google Places done. Starting Overpass backup in 2s...');
+    await sleep(2000);
 
     const osmElements = await scrapeOverpass();
     console.log(`Overpass: ${osmElements.length} elements fetched.`);
@@ -485,16 +446,13 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
   const { error: finalUpdateError } = await db
     .from('scrape_runs')
     .update({
-      status:               finalStatus,
-      leads_found:          leadsFound,
-      api_calls_made:       apiCallsMade - (apiUsage.calls_made || 0),
-      new_leads_skipped:    newLeadsSkipped,
-      fsq_results_fetched:  fsqResultsFetched,
-      fsq_checked_website:  fsqCheckedWebsite,
-      fsq_no_website_found: fsqNoWebsiteFound,
-      pointer_end:          currentPointer,
-      error_message:        errorMessage,
-      completed_at:         new Date().toISOString(),
+      status:            finalStatus,
+      leads_found:       leadsFound,
+      api_calls_made:    apiCallsMade - (apiUsage.calls_made || 0),
+      new_leads_skipped: newLeadsSkipped,
+      pointer_end:       currentPointer,
+      error_message:     errorMessage,
+      completed_at:      new Date().toISOString(),
     })
     .eq('id', scrapeRun.id);
 
@@ -505,8 +463,8 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
   const message = errorMessage
     ? `Scrape errored: ${errorMessage}. Saved ${leadsFound} leads.`
     : apiCallsMade >= dailyLimit && !foursquareLimitReached
-    ? `API limit (${dailyLimit}) reached. Saved ${leadsFound} leads.`
-    : `Scrape completed. Saved ${leadsFound} leads. (${fsqNoWebsiteFound} Foursquare without website, Overpass included)`;
+    ? `API limit (${dailyLimit}) reached. Saved ${leadsFound} leads. (${placesChecked} places checked, ${placesWithoutWebsite} without website)`
+    : `Scrape completed. Saved ${leadsFound} leads. (${placesChecked} checked, ${placesWithoutWebsite} without website)`;
 
   console.log(`=== runDailyScrape END | status=${finalStatus} | leads=${leadsFound} | calls=${apiCallsMade} ===`);
 

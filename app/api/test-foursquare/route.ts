@@ -1,85 +1,43 @@
 import { NextResponse } from 'next/server';
+import { searchGooglePlaces } from '@/lib/scraper/googlePlaces';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Diagnostic endpoint — tests ONE Foursquare search + ONE Place Details call.
+ * Diagnostic endpoint — tests ONE Google Places Text Search call.
  * Visit /api/test-foursquare in your browser to see the raw API response.
- * This tells us immediately if the API key works and what fields come back.
+ * This tells us immediately if the Google Places API key works.
  */
 export async function GET(): Promise<NextResponse> {
-  const apiKey = process.env.FOURSQUARE_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json({ error: 'FOURSQUARE_API_KEY is not set in environment variables.' });
-  }
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
 
   const keyInfo = {
-    prefix: apiKey.substring(0, 10) + '...',
-    length: apiKey.length,
-    startsWithFsq3: apiKey.startsWith('fsq3'),
+    GOOGLE_PLACES_API_KEY: apiKey ? `SET (prefix: ${apiKey.substring(0, 8)}...)` : 'MISSING',
+    FOURSQUARE_API_KEY: process.env.FOURSQUARE_API_KEY
+      ? 'SET but retired (410 Gone as of May 15 2026 — no longer used)'
+      : 'NOT SET',
   };
 
-  // ── Step 1: Search ──────────────────────────────────────────────────────────
-  const searchUrl =
-    'https://api.foursquare.com/v3/places/search' +
-    '?query=dentist&near=Banjara+Hills%2C+Hyderabad%2C+India&limit=3' +
-    '&fields=fsq_id,name,location,tel,rating,stats';
-
-  let searchStatus: number;
-  let searchBody: unknown;
-
-  try {
-    const searchRes = await fetch(searchUrl, {
-      method: 'GET',
-      headers: { Authorization: apiKey, Accept: 'application/json' },
-    });
-    searchStatus = searchRes.status;
-    const rawText = await searchRes.text();
-    try { searchBody = JSON.parse(rawText); } catch { searchBody = rawText; }
-  } catch (err) {
+  if (!apiKey) {
     return NextResponse.json({
+      success: false,
       keyInfo,
-      error: 'Network error calling Foursquare search',
-      detail: String(err),
+      error:
+        'GOOGLE_PLACES_API_KEY is not set in Vercel environment variables. ' +
+        'Get a key from https://console.cloud.google.com → enable "Places API (New)" → create an API key.',
     });
   }
 
-  // ── Step 2: Place Details on first result (if any) ─────────────────────────
-  let detailsStatus: number | null = null;
-  let detailsBody: unknown = null;
-  let firstFsqId: string | null = null;
-
-  const results = (searchBody as { results?: { fsq_id: string }[] })?.results;
-  if (Array.isArray(results) && results.length > 0) {
-    firstFsqId = results[0].fsq_id;
-
-    const detailsUrl =
-      `https://api.foursquare.com/v3/places/${firstFsqId}` +
-      '?fields=fsq_id,name,location,tel,website,rating,stats';
-
-    try {
-      const detailsRes = await fetch(detailsUrl, {
-        method: 'GET',
-        headers: { Authorization: apiKey, Accept: 'application/json' },
-      });
-      detailsStatus = detailsRes.status;
-      const rawText = await detailsRes.text();
-      try { detailsBody = JSON.parse(rawText); } catch { detailsBody = rawText; }
-    } catch (err) {
-      detailsBody = `Network error: ${String(err)}`;
-    }
-  }
+  const places = await searchGooglePlaces('Dentist', 'Banjara Hills', 3);
 
   return NextResponse.json({
+    success: places.length > 0,
     keyInfo,
-    search: {
-      url: searchUrl,
-      status: searchStatus!,
-      body: searchBody,
-    },
-    details: firstFsqId
-      ? { fsq_id: firstFsqId, url: `https://api.foursquare.com/v3/places/${firstFsqId}?fields=...`, status: detailsStatus, body: detailsBody }
-      : { note: 'No results from search — details call skipped' },
+    resultsCount: places.length,
+    firstPlace: places[0] ?? null,
+    message:
+      places.length > 0
+        ? `✅ Google Places API is working! Got ${places.length} results.`
+        : '⚠️ Google Places API key is set but returned 0 results. Check Vercel logs for the error body.',
   });
 }
