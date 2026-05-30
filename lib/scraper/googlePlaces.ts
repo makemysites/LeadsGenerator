@@ -41,11 +41,11 @@ export function extractArea(place: GooglePlace, fallback: string): string {
   const components = place.addressComponents || [];
 
   const sublocality = components.find(
-    (c) => c.types.includes('sublocality_level_1') || c.types.includes('sublocality')
+    (c) => c.types?.includes('sublocality_level_1') || c.types?.includes('sublocality')
   );
   if (sublocality) return sublocality.longText;
 
-  const locality = components.find((c) => c.types.includes('locality'));
+  const locality = components.find((c) => c.types?.includes('locality'));
   if (locality) return locality.longText;
 
   return fallback;
