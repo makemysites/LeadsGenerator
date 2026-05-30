@@ -20,9 +20,9 @@ export default function DashboardPage() {
     async function fetchData() {
       try {
         const [statsRes, scrapeRes, leadsRes] = await Promise.all([
-          fetch('/api/stats'),
-          fetch('/api/scrape/status'),
-          fetch('/api/leads?date=today&status=to_call'),
+          fetch('/api/stats', { cache: 'no-store' }),
+          fetch('/api/scrape/status', { cache: 'no-store' }),
+          fetch('/api/leads?date=today&status=to_call', { cache: 'no-store' }),
         ]);
 
         if (statsRes.ok) {
@@ -86,7 +86,7 @@ export default function DashboardPage() {
         <div className="api-banner" style={{ marginBottom: '24px' }}>
           <span className="api-banner-icon">⚠️</span>
           <span>
-            ⚠️ Foursquare API daily limit reached ({apiUsage.daily_limit}/{apiUsage.daily_limit} calls used). 
+            ⚠️ Google Places API daily limit reached ({apiUsage.daily_limit}/{apiUsage.daily_limit} calls used). 
             No more searches today. Scraper resumes tomorrow at 7:00 AM.
           </span>
         </div>
@@ -133,7 +133,7 @@ export default function DashboardPage() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', fontSize: '13px' }}>
               <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>
-                <span style={{ color: '#64748B' }}>Foursquare Results Fetched:</span>{' '}
+                <span style={{ color: '#64748B' }}>Google Results Fetched:</span>{' '}
                 <strong style={{ color: '#0F172A' }}>{lastRun.fsq_results_fetched ?? 0}</strong>
               </div>
               <div style={{ background: '#F8FAFC', padding: '8px 12px', borderRadius: '6px' }}>

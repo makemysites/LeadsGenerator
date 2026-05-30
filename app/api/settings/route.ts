@@ -56,13 +56,29 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
     const supabase = createServerClient();
 
-    // Update search_config
+    // Fetch the existing configuration first to get its ID
+    const { data: existingConfig, error: fetchError } = await supabase
+      .from('search_config')
+      .select('id')
+      .limit(1)
+      .maybeSingle();
+
+    if (fetchError || !existingConfig) {
+      console.error('Error fetching search config for update:', fetchError);
+      return NextResponse.json(
+        { error: `Failed to update settings: ${fetchError?.message || 'Search config row not found'}` },
+        { status: 500 }
+      );
+    }
+
+    // Update search_config with the correct ID filter
     const { data: config, error: configError } = await supabase
       .from('search_config')
       .update({
         daily_limit,
         updated_at: new Date().toISOString(),
       })
+      .eq('id', existingConfig.id)
       .select()
       .single();
 

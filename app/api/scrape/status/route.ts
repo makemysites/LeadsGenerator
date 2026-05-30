@@ -32,7 +32,7 @@ export async function GET(): Promise<NextResponse> {
       supabase
         .from('scrape_runs')
         .select('*')
-        .order('run_date', { ascending: false })
+        .order('started_at', { ascending: false })
         .limit(7),
     ]);
 

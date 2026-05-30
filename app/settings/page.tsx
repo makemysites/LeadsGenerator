@@ -30,8 +30,8 @@ export default function SettingsPage() {
     async function fetchData() {
       try {
         const [configRes, statusRes] = await Promise.all([
-          fetch('/api/settings'),
-          fetch('/api/scrape/status'),
+          fetch('/api/settings', { cache: 'no-store' }),
+          fetch('/api/scrape/status', { cache: 'no-store' }),
         ]);
 
         if (configRes.ok) {
@@ -95,7 +95,7 @@ export default function SettingsPage() {
       showToast(data.message || 'Scrape completed!', data.leadsFound > 0 ? 'success' : 'info');
       
       // Refresh status data
-      const statusRes = await fetch('/api/scrape/status');
+      const statusRes = await fetch('/api/scrape/status', { cache: 'no-store' });
       if (statusRes.ok) {
         const statusData: ScrapeStatus = await statusRes.json();
         setScrapeStatus(statusData);
@@ -117,7 +117,7 @@ export default function SettingsPage() {
       if (!res.ok) throw new Error(data.error || 'Reset failed');
       showToast(data.message || 'API counter reset. You can scrape again.', 'success');
       // Refresh status to show updated counter
-      const statusRes = await fetch('/api/scrape/status');
+      const statusRes = await fetch('/api/scrape/status', { cache: 'no-store' });
       if (statusRes.ok) {
         const statusData: ScrapeStatus = await statusRes.json();
         setScrapeStatus(statusData);
@@ -149,7 +149,7 @@ export default function SettingsPage() {
       setConfirmText('');
       
       // Refresh status
-      const statusRes = await fetch('/api/scrape/status');
+      const statusRes = await fetch('/api/scrape/status', { cache: 'no-store' });
       if (statusRes.ok) {
         const statusData: ScrapeStatus = await statusRes.json();
         setScrapeStatus(statusData);
@@ -163,8 +163,8 @@ export default function SettingsPage() {
   }
 
   // Cost calculation
-  // Foursquare Places API v3 is completely free up to 1000 calls/day.
-  // Overpass API is completely free and has no limit, and doesn't count toward Foursquare limit.
+  // Google Places API includes $200 free monthly credits from Google Cloud.
+  // Overpass API is completely free and has no limit, and doesn't count toward Google limit.
   const estimatedCallsPerMonth = dailyLimit * 30;
 
   return (
@@ -186,9 +186,9 @@ export default function SettingsPage() {
           {/* API Status Card */}
           <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
             <div>
-              <div style={{ fontSize: '16px', fontWeight: 600 }}>Foursquare Places API Status</div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Google Places API Status</div>
               <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-                Verifies connection with the Foursquare Places SDK v3
+                Verifies connection with the Google Places API
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -202,7 +202,7 @@ export default function SettingsPage() {
           <div className="card">
             <div className="section-title">📊 Lead Generation Controls</div>
             <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', marginBottom: '20px' }}>
-              Control your daily Foursquare Places API quota. Higher limits search more areas but consume more daily free tier credits.
+              Control your daily Google Places API quota. Higher limits search more areas but consume more daily API credits.
             </p>
 
             <div style={{ marginBottom: '24px' }}>
@@ -230,12 +230,12 @@ export default function SettingsPage() {
 
             {/* Cost estimator */}
             <div style={{ padding: '16px', background: 'var(--color-bg)', borderRadius: '8px', border: '1px solid var(--color-border)', fontSize: '14px' }}>
-              <div style={{ fontWeight: 600, marginBottom: '6px' }}>Foursquare & OpenStreetMap Quota Info</div>
+              <div style={{ fontWeight: 600, marginBottom: '6px' }}>Google Places & OpenStreetMap Quota Info</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--color-text-secondary)' }}>
-                <div>Est. Max Foursquare Requests: <strong>{estimatedCallsPerMonth.toLocaleString()} calls / month</strong></div>
-                <div>Foursquare Cost: <strong style={{ color: 'var(--color-success)' }}>$0.00 (100% FREE)</strong></div>
+                <div>Est. Max Google Places Requests: <strong>{estimatedCallsPerMonth.toLocaleString()} calls / month</strong></div>
+                <div>Google Places Cost: <strong style={{ color: 'var(--color-success)' }}>$0.00 (100% FREE)</strong></div>
                 <div style={{ fontSize: '12px', marginTop: '6px', color: 'var(--color-success)', fontWeight: 500 }}>
-                  🎉 Foursquare Places API is 100% FREE! Foursquare provides 1,000 free calls daily. We set a maximum limit of 100 calls/day as a safe buffer.
+                  🎉 Google Places API includes $200 free monthly credits from Google Cloud. We set a maximum limit of 100 calls/day as a safe buffer to stay within the free tier.
                 </div>
               </div>
             </div>
@@ -277,7 +277,7 @@ export default function SettingsPage() {
             <div>
               <div style={{ fontSize: '16px', fontWeight: 600 }}>🔄 Reset API Call Counter</div>
               <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-                Counter stuck at 100? Reset today&apos;s Foursquare API usage to 0 so you can scrape again.
+                Counter stuck at 100? Reset today&apos;s Google API usage to 0 so you can scrape again.
               </div>
             </div>
             <button

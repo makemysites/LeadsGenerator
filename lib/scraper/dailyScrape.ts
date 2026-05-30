@@ -450,6 +450,12 @@ export async function runDailyScrape(force = false): Promise<ScrapeResult> {
       leads_found:       leadsFound,
       api_calls_made:    apiCallsMade - (apiUsage.calls_made || 0),
       new_leads_skipped: newLeadsSkipped,
+      // Map Google Places search metrics to existing columns to avoid breaking the DB schema.
+      // fsq_results_fetched and fsq_checked_website map to placesChecked (all Google search results fetched/checked).
+      // fsq_no_website_found maps to placesWithoutWebsite (Google search results that had no website).
+      fsq_results_fetched: placesChecked,
+      fsq_checked_website: placesChecked,
+      fsq_no_website_found: placesWithoutWebsite,
       pointer_end:       currentPointer,
       error_message:     errorMessage,
       completed_at:      new Date().toISOString(),

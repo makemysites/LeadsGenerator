@@ -20,7 +20,7 @@ export default function ApiUsageMeter({ callsMade, dailyLimit }: ApiUsageMeterPr
   return (
     <div className={styles.wrapper}>
       <div className={styles.header}>
-        <span className={styles.label}>Foursquare API Calls Today</span>
+        <span className={styles.label}>Google Places API Calls Today</span>
         <span className={styles.count}>
           {callsMade} / {dailyLimit} ({percent}%)
         </span>
