@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { runDailyScrape } from '@/lib/scraper/dailyScrape';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,10 +16,13 @@ async function handleScrape(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const result = await runDailyScrape();
-
-    return NextResponse.json(result, {
-      status: result.status === 'failed' ? 500 : 200,
+    console.log('Automated daily scraping is disabled. Skipping runDailyScrape.');
+    return NextResponse.json({
+      success: true,
+      status: 'disabled',
+      message: 'Automated daily scraping is currently disabled.',
+      leadsFound: 0,
+      apiCallsMade: 0
     });
   } catch (error) {
     console.error('Daily scrape cron error:', error);
